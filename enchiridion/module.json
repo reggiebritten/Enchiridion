@@ -1,0 +1,15 @@
+{
+    "name": "enchiridion",
+    "title": "Enchiridion",
+    "description": "Enchiridion Content Organizer",
+    "version": "0.1",
+    "author": "Reggie B",
+    "scripts": ["./enchiridion-script.js", "./emoji-button/emoji-button.js", "./jquery.singleclick.js"],
+    "styles": ["./enchiridion-style.css"],
+    "packs": [],
+    "url": "",
+    "manifest": "",
+    "download": "",
+    "minimumCoreVersion": "0.8.0",
+    "compatibleCoreVersion": "0.8.9"
+}
