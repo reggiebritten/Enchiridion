@@ -8,7 +8,7 @@
     "styles": ["./enchiridion-style.css"],
     "packs": [],
     "url": "",
-    "manifest": "",
+    "manifest": "https://github.com/reggiebritten/Enchiridion/blob/main/enchiridion/module.json",
     "download": "",
     "minimumCoreVersion": "0.8.0",
     "compatibleCoreVersion": "0.8.9"
