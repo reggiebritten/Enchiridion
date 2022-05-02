@@ -2,7 +2,7 @@
     "name": "enchiridion",
     "title": "Enchiridion",
     "description": "Enchiridion Content Organizer",
-    "version": "0.1",
+    "version": "0.2",
     "author": "Reggie B",
     "scripts": ["./enchiridion-script.js", "./emoji-button/emoji-button.js", "./jquery.singleclick.js"],
     "styles": ["./enchiridion-style.css"],
