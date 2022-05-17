@@ -1,0 +1,30 @@
+<form autocomplete="off" onsubmit="event.preventDefault();" class="add-listener">
+
+    <nav class = 'enchiridion-nav'>
+        <ul>
+            <li class="header-search flexrow">
+                <a class="fas fa-plus"></a>
+                <i class="fas fa-search"></i>
+                <input class="enchiridion-search" type="text" name="search" value="{{!--enchiridionFilter--}}" placeholder="Search" autocomplete="off">
+                <div class="enchiridion-search-controls">
+                    <a class="fa fa-link" title="Include Reference Names" data-toggle="references"></a>
+                    <a class="fas fa-sticky-note" title="Include Note Contents" data-toggle="notes"></a>
+                    <a class="fas fa-image" title="Include Asset Names" data-toggle="assets"></a>
+                    <a class="fa fa-suitcase" title="Include Owned Item Names" data-toggle="items"></a>
+                    {{!--<a class="far fa-font-case" title="Case Sensitive" data-toggle="case"></a>
+                    <a class="fas fa-passport" title="Include Names" data-toggle="names"></a>--}}
+                </div>
+
+            </li>
+
+        </ul>
+    </nav>
+
+    <div class='enchiridion-main'>
+        <nav class="enchiridion-tabs tabs">
+        </nav>
+        <section class="enchiridion-body">
+        </section>
+    </div>
+
+</form>
