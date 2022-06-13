@@ -13382,7 +13382,7 @@
 
   
     //console.log([...new Set()])
-    return detaultIcons.reverse().concat(JSON.parse(localStorage.getItem(xn))).filter((v,i,a)=>a.findIndex(t=>(t.n === v.n))===i);
+    return detaultIcons.reverse().concat(JSON.parse(localStorage.getItem(xn))).filter((v,i,a)=>a.findIndex(t=>(t?.n === v?.n))===i);
   }
   function jn(e) {
     var n = Bn(),
@@ -13404,7 +13404,7 @@
               });
         }
         return e;
-      })({}, e, { key: e.n });
+      })({}, e, { key: e?.n });
     localStorage.setItem(
       xn,
       JSON.stringify(
@@ -13412,7 +13412,7 @@
           .concat(
             Dn(
               n.filter(function (e) {
-                return e.key !== a.key;
+                return e?.key !== a.key;
               })
             )
           )
@@ -13425,8 +13425,7 @@
   function Mn(e, n) {
     var a = un("div", zn);
     return (
-
-      e?.forEach(function (e) {
+      e?.filter(n => n).forEach(function (e) {
         return a.appendChild(
           (function (e, n) {
             var a = un("button", On);

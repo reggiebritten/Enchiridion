@@ -1,13 +1,15 @@
 .enchiridion-main {
-    height: 95%;
-	width: 535px;
+	height: calc(100% - 35px);
+	/* width: 535px; */
+	width: 64.1%;
 	overflow-y: scroll;
     border: 1px;
 	flex-grow: 1;
-    top: 35px;
-	left: 265px;
+    top: 30px;
+	/* left: 265px; */
+	left: 36%;
 	position: absolute;
-	padding-right: 10px;
+	padding: 3px;
 }
 
 #enchiridion .header-search {
@@ -27,8 +29,8 @@
 }
 
 #enchiridion .header-search .fa-plus {
-	padding-top: 5px;
-	padding-right: 10px;
+	padding: 0px 5px 0px 5px;
+    font-size: 150%;
 	border-right: 2px groove #eeede0;
 }
 
@@ -54,9 +56,6 @@
     padding: 0 0 0 2em;
 }
 
-#enchiridion .enchiridion-nav ul:first-child{
-    padding: 0 0 0 0em;
-}
 
 .enchiridion-search{
 	min-width: 280px;
@@ -71,6 +70,7 @@
 	padding-top: 6px;
     margin-top: -8px;
 	padding-bottom: 6px;
+	padding-right: 4px;
     margin-bottom: -8px;
 }
 
@@ -80,7 +80,12 @@
 
 .enchiridion-tree-title{
 	flex: 100;
+	white-space: nowrap;
 }
+.enchiridion-ownership{
+	white-space: nowrap;
+}
+
 
 .enchiridion-expand{
 	padding-top: 3px;
@@ -127,15 +132,31 @@
 
 .enchiridion-nav {
 
-	min-width: 250px;
-	min-height: 750px;
-	max-width: 250px;
+	/* min-width: 250px; */
+	/* min-height: 750px; */
+	/* max-width: 250px; */
 	/* overflow-x:scroll; */
-	padding-right: 10px;
-
-	padding-bottom: 20px;
+	/* padding-right: 10px; */
+	width: 35%;
+    overflow-x: scroll;
+    overflow-y: hidden;
+	padding-bottom: 7px;
+    border-bottom: 2px groove #eeede0;
 	border-right: 2px groove #eeede0;
+	margin-top: -10px;
+    margin-left: -5px;
+	transform: scale(1, -1);
 }
+
+#enchiridion .enchiridion-nav ul:first-child{
+    padding: 0 0 0 0em;
+    /* width: fit-content; */
+    /* min-width: 100%; */
+    min-width: 250px;
+	transform: scale(1, -1);
+    /* overflow: hidden; */
+}
+
 
 .enchiridion-new-asset {
 	width: 100px;
@@ -150,6 +171,7 @@
 
 #enchiridion .window-content form, #enchiridion .window-header{
 	direction: ltr;
+    /* height: 100%; */
 }
 
 #enchiridion .tab{
@@ -193,10 +215,20 @@ padding:2px;
 	white-space: nowrap;
 	/* max-width: 150px; */
 	flex:1;
+	overflow: hidden;
+    white-space: nowrap;
+    /* max-width: 150px; */
+    /* min-width: 39px; */
+    flex: 1;
+    flex-shrink: 100;
 }
 
 .enchiridion-close-tab{
 	padding-top: 3px;
+}
+
+:not(.active) > .enchiridion-close-tab{
+	display:none;
 }
 
 #enchiridion .tabs {
@@ -211,6 +243,7 @@ padding:2px;
 	/* display: flex; */
 	text-overflow: ellipsis;
 	overflow: hidden;
+	padding-right: 500px;
 }
 
 .enchiridion-tab a{
@@ -252,12 +285,13 @@ padding:2px;
 	text-overflow: ellipsis;
 }
 
-.enchiridion-asset-list{
+#enchiridion .enchiridion-assets .enchiridion-asset-list{
 	display: grid;
 	grid-template-columns: 25% 25% 25% 25%;
 	grid-template-rows: auto;
 	align-items: center;
 	text-align: center;
+	padding:0;
 }
 
 .enchiridion-assets{
@@ -292,6 +326,12 @@ padding:2px;
 	height: 100px;
 	overflow: hidden;
 	margin: auto;
+}
+
+#enchiridion .asset-image {
+	aspect-ratio: 1 / 1;
+    width: 100%;
+    height: unset;
 }
 
 .enchiridion-note-list li{
@@ -340,10 +380,11 @@ padding:2px;
 }
 
 .enchiridion-banner{
-	border-bottom: 1px solid;
+	/* border-bottom: 1px solid; */
 	padding-bottom: 2px;
 	flex:50;
 	margin-left: 5px;
+	/* height: 110px; */
 }
 
 .enchiridion-open{
@@ -352,6 +393,7 @@ padding:2px;
 
 .enchiridion-title{
 	display: flex;
+	margin-bottom:2px;
 }
 
 .emoji-picker{
@@ -368,6 +410,13 @@ padding:2px;
 .enchiridion-references{
 	overflow: auto;
 	height: 4em;
+	line-height: 1.5em;
+	height:100%;
+}
+
+.enchiridion-reference-section{
+	margin: 5px;
+	border: 2px groove #eeede0;
 }
 
 /* form .form-group .form-fields .enchiridion-icon {
@@ -392,6 +441,19 @@ form .form-group .form-fields .enchiridion-create-name{
 	box-shadow: 0 0 10px #31ff5e inset;
 }
 
+.enchiridion-multiselect > .enchiridion-tree-header > .enchiridion-tree-title > a > .icon {
+    visibility: hidden;
+    position: relative;
+}
+
+.enchiridion-multiselect > .enchiridion-tree-header > .enchiridion-tree-title > a > .icon::after {
+    visibility: visible;
+    position: absolute;
+    bottom: 1px;
+    left: 0;
+    content: "✔️";
+}
+
 #enchiridion .scene-active{
 	box-shadow: 0 0 10px #3157ff inset;
 }
@@ -404,6 +466,9 @@ form .form-group .form-fields .enchiridion-create-name{
 .enchiridion-search-controls{
 	flex:20;
 	font-size:80%;
+	display: inline-grid;
+    grid-template-columns: 1em 1em;
+    grid-column-gap: 0.5em;
 }
 
 #enchiridion .mceNonEditable{

@@ -8,12 +8,11 @@ class Enchiridion extends FormApplication {
 			width: 800,
 			height: 800,
 			documents: [],
-			openTabs: [],
 			minimum: 0,
 			scrollY: ['.enchiridion-body', '.enchiridion-nav', '.enchiridion-main', '.enchiridion-document'],
 			maximum: null,
 			minimizable: true,
-			resizable: false,
+			resizable: true,
 			tabs: [{ navSelector: ".enchiridion-tabs", contentSelector: ".enchiridion-body", initial: ""}]
 		});
 	}
@@ -36,24 +35,53 @@ Enchiridion.open = async function(){
 	const actors = game.actors;
 	const items = game.items;
 	const journal = game.journal;
-	const folders = game.folders.filter((folder) => ["Actor","JournalEntry","Item"].includes(folder.data.type));
-	let documents = [...journal, ...actors, ...items, ...folders];
+	let documents = [...journal, ...actors, ...items];
 	documents = documents.filter((document)=> document.visible);
+	const folders = game.folders.filter((folder) => ["Actor","JournalEntry","Item"].includes(folder.type));
+	documents = [...documents, ...folders];
 	documents.sort((a, b) => a.sort - b.sort);
-	const userTabs = game.settings.get('enchiridion', 'userTabs');
-	const openTabs = await Promise.all(userTabs.map(async tab =>  fromUuid(tab)));;
 	const activeTab = game.settings.get('enchiridion', 'activeTab');
 	const tabs = [{ navSelector: ".enchiridion-tabs", contentSelector: ".enchiridion-body", initial: activeTab}]
 	const title = game.world.data.title+" Enchiridion"
-	const options = {title, documents, tabs, openTabs};
+	const options = {title, documents, tabs/*, openTabs*/};
 	const window = new Enchiridion(this.object, options);
 	await window.render(true);
 }
 
-Enchiridion.addToTree = async function (documents){
+
+Enchiridion.updateDocument = async function (document, updates, options){
+	if (updates?.flags?.enchiridion?.notes || updates?.flags?.enchiridion?.assets || document.actor) return;
+
+	const otherUuids = options.otherUuids;
+	let documents = [document]
+	await otherUuids?.forEach(async function (uuid){
+		if (!uuid) return;
+		const otherDocument = await fromUuid(uuid);
+		documents.push(otherDocument);
+	})
+	Enchiridion.addToTree(documents);
+	Enchiridion.addToBody(documents);
+}
+
+Enchiridion.deleteDocument = async function (document){
+	if (!$(`.enchiridion-tree[data-uuid="${document.uuid}"]`).siblings().length) $(`.enchiridion-tree[data-uuid="${document.uuid}"]`).parent().parent().children('h4').children('.enchiridion-expand').children('.enchiridion-chevron').hide();
+	$(`#enchiridion [data-uuid="${document.uuid}"]`).remove()
+	let tabs = game.settings.get('enchiridion', 'userTabs')
+	tabs = $.grep(tabs, function(value) {
+	return value != document.uuid;
+	});
+	game.settings.set('enchiridion', 'userTabs', tabs);
+
+	const active = game.settings.get('enchiridion', 'activeTab');
+	$('#enchiridion').find('.active').removeClass('active');
+	$(`#enchiridion .enchiridion-main [data-uuid="${active}"]`).addClass("active")
+}
+
+Enchiridion.addToTree = function (documents){
 	const $tree = $('#enchiridion .enchiridion-nav > ul');
 	const expanded = game.settings.get("enchiridion", "userExpanded");
 	documents.forEach(document => {
+		if (!document?.visible && document?.documentName != 'Folder') return;
 		const $document = $tree.find(`.enchiridion-tree[data-uuid="${document.uuid}"]`);
 
 		//Children and Expanded?
@@ -64,7 +92,7 @@ Enchiridion.addToTree = async function (documents){
 		let type = document.type || document.documentName
 		if (document.documentName == 'Folder') type = "Folder";
 		const defaultIcon =  game.settings.get('enchiridion', 'default-'+type);
-		const icon = (document.flags.enchiridion?.icon||defaultIcon);
+		const icon = (document.flags?.enchiridion?.icon||defaultIcon);
 
 		//Determine the ownership icons
 		let ownership = '';
@@ -99,16 +127,34 @@ Enchiridion.addToTree = async function (documents){
 			}
 		}
 
+		//Exposes Resernces
+		let referencesString = '';
+		document.flags?.enchiridion?.assets?.forEach(asset =>{
+			referencesString += " reference-"+asset?.uuid?.replace('.','-');
+		})
+		
+		
+		if (document.documentName != 'Folder'){
+			let summary = document.content||document.system?.details?.biography?.value||document.system?.description?.value||document.system?.background||document?.system?.summary||"";
+			let summaryUuids = summary?.match(/@(.*?)\[(.*?)]/g)
+			if (summaryUuids?.length){
+				for (let summaryUuid of summaryUuids) {
+					summaryUuid = summaryUuid.replace('[','.').replace(']','').replace('@','')
+					referencesString += " reference-"+summaryUuid.replace('.','-');
+				}
+			}
+		}
+
 		//Generate the entry
 		const treeEntry = `
-		<li class="add-listener enchiridion-document enchiridion-tree ${expandedClass} enchiridion-drop" data-drop-type="tree" data-uuid="${document.uuid}" data-sort="${document.sort}">
+		<li class="add-listener enchiridion-document enchiridion-tree ${expandedClass} enchiridion-drop ${referencesString}" data-drop-type="tree" data-uuid="${document.uuid}" data-sort="${document.sort || "0"+document.id.split('').map(x=>x.charCodeAt(0)).reduce((a,b)=>a+b)}">
 			<hr>
 			<h4 class="enchiridion-tree-header">
 				<div class = 'enchiridion-expand'>
 					<a class="fas fa-chevron-right enchiridion-chevron" style="display: none"></a>
 				</div>
 				<div class = 'enchiridion-tree-title enchiridion-open-tab enchiridion-drag'>
-						${icon} ${document.data.name}
+					<a><span class = "icon">${icon}</span> ${document.name}</a>
 				</div>
 				<div><a class="enchiridion-ownership">${ownership}</a></div>
 			</h4>
@@ -116,321 +162,348 @@ Enchiridion.addToTree = async function (documents){
 		</li>`;
 
 		//Update the entry if it already exists, otherwise create it
-			// console.log(document.flags.enchiridion?.parent)
-		if($document.length && document.flags.enchiridion?.parent){
+		if($document.length && document.flags?.enchiridion?.parent){
 			$document.replaceWith(treeEntry)
-			if($children.trim()){$(`#enchiridion .enchiridion-tree[data-uuid="${document.uuid}"] > h4 > .enchiridion-expand > .enchiridion-chevron`).show()}
-			else {$(`#enchiridion .enchiridion-tree[data-uuid="${document.uuid}"] > h4 > .enchiridion-expand > .enchiridion-chevron`).hide()}
-			Enchiridion.sort([document])
 		}else{
 			$(`#enchiridion .enchiridion-tree[data-uuid="${document.uuid}"]`).remove()
 			$tree.append(treeEntry);
-			if($children.trim()){$(`#enchiridion .enchiridion-tree[data-uuid="${document.uuid}"] > h4 > .enchiridion-expand > .enchiridion-chevron`).show()}
-			else {$(`#enchiridion .enchiridion-tree[data-uuid="${document.uuid}"] > h4 > .enchiridion-expand > .enchiridion-chevron`).hide()}
-			Enchiridion.sort([document])
 		};
+		
 		;
 	});
 
-	//Sort documents under their parents
-	const children  = documents.filter(document => document.flags.enchiridion?.parent || document.folder?.uuid || document.parentFolder?.uuid);
+	// Sort documents under their parents
+	const children  = documents.filter(document => document?.flags?.enchiridion?.parent || document?.folder?.uuid || document?.parentFolder?.uuid);
 	children.forEach(function(document){
-		const parent = document.flags.enchiridion?.parent || document.folder?.uuid || document.parentFolder?.uuid;
-		const $parent = $('#enchiridion').find(`.enchiridion-tree[data-uuid="${parent}"] > .enchiridion-children`);
-		if (!$parent.length) return;
+		const parent = document.flags?.enchiridion?.parent || document.folder?.uuid || document.parentFolder?.uuid;
+		if (!parent) return;
+		let $parent = $('#enchiridion').find(`.enchiridion-tree[data-uuid="${parent}"] > .enchiridion-children`);
+		if (!$parent.length) return;//$parent = $('.enchiridion-unknown > .enchiridion-children') ;
 		$parent.siblings('h4').children('.enchiridion-expand').children('.enchiridion-chevron').show()
 		const $child = $('#enchiridion').find(`.enchiridion-tree[data-uuid="${document.uuid}"]`);
 		$parent.append($child.prop('outerHTML'));
 		$child.remove();
 	});
 
+	//Hide Chevrons and Hidden Folders
+	documents.forEach(document => {
+		if (!document?.visible && document?.documentName != 'Folder') return; // && !shownFolders.includes(document.uuid)
+		const $document = $tree.find(`.enchiridion-tree[data-uuid="${document.uuid}"]`);
+		const $children = $document?.children('.enchiridion-children').html() || "";
+		if($children.trim()){$(`#enchiridion .enchiridion-tree[data-uuid="${document.uuid}"] > h4 > .enchiridion-expand > .enchiridion-chevron`).show()}
+		else {$(`#enchiridion .enchiridion-tree[data-uuid="${document.uuid}"] > h4 > .enchiridion-expand > .enchiridion-chevron`).hide()}
+	});
+
+	$(`#enchiridion .enchiridion-tree[data-uuid*="Folder"]`).filter(function(){
+        return $(this).children(".enchiridion-children").children().length == 0 && (!game.user.isGM || $(this).data('uuid') == 'Folder.Unknown');
+    }).hide();
+
+	//Sort and Listen
+	Enchiridion.sort(documents)
 	Enchiridion.listeners()
 }
+
+
+
+
+
+
+
+
+
+
 
 Enchiridion.addToBody = async function (documents){
 	
 	const $body = $('#enchiridion').find('.enchiridion-body');
 	const $tabs = $('#enchiridion').find('.enchiridion-tabs');
-	const $tree = $('#enchiridion .enchiridion-nav > ul');
 	const userTabs = game.settings.get('enchiridion', 'userTabs');
 	const activeTab = game.settings.get('enchiridion', 'activeTab');
 
-	
-	userTabs.forEach(tab =>{
+	if (game.ForgeOfLegends){
+		for (const tab of userTabs) {
+			const document = documents.find(document => document.uuid === tab);
+			if (document?.visible && document.documentName =="Item"){
+				await game.ForgeOfLegends?.generateItemSummary(document);
+			}
+		}
+	}
 
+	for (const tab of userTabs) {
 		const document = documents.find(document => document.uuid === tab);
-		if (!document) return;
+		if (document?.visible){
 
-		//Determine the entry icon
-		let type = document.type || document.documentName
-		if (document.documentName == 'Folder') type = "Folder";
-		const defaultIcon =  game.settings.get('enchiridion', 'default-'+type);
-		const icon = (document.flags.enchiridion?.icon||defaultIcon);
+			//Determine the entry icon
+			let type = document.type || document.documentName
+			if (document.documentName == 'Folder') type = "Folder";
+			const defaultIcon =  game.settings.get('enchiridion', 'default-'+type);
+			const icon = (document.flags?.enchiridion?.icon||defaultIcon);
 
-		//Add info to header
-		let references ='';
+			//Add references to header
+			let references ='';
 
-		// //Parent
-		// let parent =null;
-		// const parentUuid = document.flags.enchiridion?.parent;
-		// if (parentUuid) parent = await fromUuid(parentUuid);
-		// if (parent?.visible) {
-		// 	let type = parent.type || parent.documentName
-		// 	if (parent.documentName == 'Folder') type = "Folder";
-		// 	const defaultIcon =  game.settings.get('enchiridion', 'default-'+type);
-		// 	references += (parent.flags.enchiridion?.icon||defaultIcon)+parent.name
-		// }
-
-		// //Children
-		// const $tree = $(`.enchiridion-tree[data-uuid="${document.uuid}"]`);
-		// const childrenUuids = $tree.children(`.enchiridion-children`).children().toArray().map(el => $(el).data('uuid'))
-		// await childrenUuids.forEach(async childUuid =>{
-		// 	const child = await fromUuid(childUuid)
-		// 	if (child?.visible) {
-		// 		let type = child.type || child.documentName
-		// 		if (child.documentName == 'Folder') type = "Folder";
-		// 		const defaultIcon =  game.settings.get('enchiridion', 'default-'+type);
-		// 		references += (child.flags.enchiridion?.icon||defaultIcon)+child.name
-		// 	}
-		// })
-
-		//Assets
-		let assets = "";
-		let assetsString = "";
-		document.flags.enchiridion?.assets?.forEach(asset =>{
-			let assetButtons = '';
-			switch(asset?.type){
-				case 'image':
-					assetButtons += '<a class="fas fa-image enchiridion-asset-activate" data-activation="1" title = "View"></a><a class="fas fa-share enchiridion-asset-activate" data-activation="2" title = "Share"></a>';
-				break;
-				case 'video':
-					assetButtons += '<a class="fas fa-image enchiridion-asset-activate" data-activation="1" title = "View"></a><a class="fas fa-share enchiridion-asset-activate" data-activation="2" title = "Share"></a>';
-				break;
-				case 'audio':
-					assetButtons += '<a class="fas fa-play enchiridion-asset-activate" data-activation="1" title = "Play/Pause"></a><a class="fas fa-sync enchiridion-asset-activate" data-activation="2" title = "Loop"></a>';
-				break;
-				case 'RollTable':
-					assetButtons += '<a class="fas fa-dice enchiridion-asset-activate" data-activation="1" title = "Roll on Table"></a><a class="fas fa-cog enchiridion-asset-activate" data-activation="2" title = "Edit"></a>';
-				break;
-				case 'Playlist':
-					assetButtons += '<a class="fas fa-play enchiridion-asset-activate" data-activation="1" title = "Play/Pause"></a><a class="fas fa-cog enchiridion-asset-activate" data-activation="2" title = "Edit"></a>';
-				break;
-				case 'Scene':
-					assetButtons += '<a class="fas fa-map enchiridion-asset-activate" data-activation="1" title = "Activate Scene"></a><a class="fas fa-cog enchiridion-asset-activate" data-activation="2" title = "Edit"></a>';
-				break;
-				case 'application':
-					assetButtons += '<a class="fas fa-file-pdf enchiridion-asset-activate" data-activation="1" title = "View PDF"></a><a class="fas fa-cog enchiridion-asset-activate" data-activation="2" title = "Edit"></a>';
-				break;
-				case 'Actor':
-					assetButtons += '<a class="fas fa-cog enchiridion-asset-activate" data-activation="1" title = "Edit"></a><a class="fas fa-book-medical enchiridion-asset-activate" data-activation="2" title = "Enchiridion"></a>';
-				break;
-				case 'Item':
-					assetButtons += '<a class="fas fa-cog enchiridion-asset-activate" data-activation="1" title = "Edit"></a><a class="fas fa-book-medical enchiridion-asset-activate" data-activation="2" title = "Enchiridion"></a>';
-				break;
-				case'JournalEntry':
-					assetButtons += '<a class="fas fa-cog enchiridion-asset-activate" data-activation="1" title = "Edit"></a><a class="fas fa-book-medical enchiridion-asset-activate" data-activation="2" title = "Enchiridion"></a>'
-				break;
-				default: assetButtons += '<a class="fas fa-cog enchiridion-asset-activate" data-activation="1" title = "Edit"></a>';
+			let parent =null;
+			const parentUuid = document.flags?.enchiridion?.parent;
+			if (parentUuid) parent = await fromUuid(parentUuid);
+			if (parent?.visible) {
+				let type = parent.type || parent.documentName
+				if (parent.documentName == 'Folder') type = "Folder";
+				const defaultIcon =  game.settings.get('enchiridion', 'default-'+type);
+				references += `<span title="Container" class="enchiridion-reference-section">🔼<a class="enchiridion-open-reference" data-reference-uuid="${parent.uuid}">${parent.flags.enchiridion?.icon||defaultIcon} ${parent.name} </a></span>`
 			}
 
-			let specialClass = ''
-			if (asset?.type == 'Scene' && game.scenes.active.id == asset.id) specialClass = 'scene-active'
-			if (game.user.isGM) assetButtons += ` <a class="fas fa-eye-slash enchiridion-asset-activate" data-activation="3" title = "Hide From Players"></a><a class="fas fa-times enchiridion-asset-activate" data-activation="4" title = "Remove Association"></a>`;
-			assets+=
-			`<li class="enchiridion-asset enchiridion-drop private-${asset.permissions.default} ${specialClass}" data-drop-type="swap" title="${asset.name}" data-name="${asset.name}" data-type='${asset.type}' data-id='${asset.id}' data-img = "${asset.image}">
-				<div class="crop">
-					<img class="enchiridion-asset-activate cover enchiridion-drag" src="${asset.image}" height="100%" width="100%" data-activation="0"/>
-				</div>
-				<input type="text" class="enchiridion-asset-name" value="${asset.name}" ${game.user.isGM?"":"readonly"}>
-				<div>                             
-					${assetButtons}
-					
-				</div>
-			</li>`;
+			const childrenUuids = $(`.enchiridion-tree[data-uuid="${document.uuid}"]`).children(`.enchiridion-children`).children().toArray().map(el => $(el).data('uuid'));
+			if (childrenUuids.length) references += `<span title="Contents" class="enchiridion-reference-section">🔽`;
+			for (const childUuid of childrenUuids) {
+				const child = await fromUuid(childUuid)
+				if (child?.visible) {
+					let type = child.type || child.documentName
+					if (child.documentName == 'Folder') type = "Folder";
+					const defaultIcon =  game.settings.get('enchiridion', 'default-'+type);
+					references += `<a class="enchiridion-open-reference" data-reference-uuid="${child.uuid}">${child.flags.enchiridion?.icon||defaultIcon} ${child.name} </a>`
+				}
+			}
+			if (childrenUuids.length) references += `</span>`;
 
-			// //Resernces
-			// assetsString += asset.uuid+";";
-			// const assetDocument = await fromUuid(asset.uuid);
-			// let type = assetDocument.type || assetDocument.documentName
-			// if (assetDocument.documentName == 'Folder') type = "Folder";
-			// const defaultIcon =  game.settings.get('enchiridion', 'default-'+type);
-			// references += (assetDocument.flags.enchiridion?.icon||defaultIcon)+assetDocument.name;
-		})
+						
+			let referenceUuids = $(`#enchiridion .reference-${document?.uuid.replace('.','-')}`).map(function(){
+				return $(this).data('uuid');
+			}).get()
 
-		//Notes
-		let notes = "";
-		let noteControls = "";
-		if(game.user.isGM){
-			noteControls =`<a class="fas fa-eye-slash enchiridion-hide-note" title = "Hide From Players"></a>
-			<a class = "fas fa-times enchiridion-delete-note" title = "Delete"></a>`
-		}
-		document.flags.enchiridion?.notes?.forEach(note =>{
-			notes+=
-			`<li class ="private-${note.permissions.default} enchiridion-note enchiridion-drop" data-drop-type="note">
-					<h3>
-						${noteControls}
-					</h3>
-					<div class="enchiridion-note-content">${note.content}</div>
-			</li>`
-		})
+			if (referenceUuids.length) references += `<span title="Incoming References" class="enchiridion-reference-section">◀️`;
+			for (const referenceUuid of referenceUuids) {
+				const reference = await fromUuid(referenceUuid);
+				let type = reference?.type || reference?.documentName
+				if (["Item","Actor","JournalEntry"].includes(reference?.documentName)){
+					if (reference.documentName == 'Folder') type = "Folder";
+					const defaultIcon =  game.settings.get('enchiridion', 'default-'+type);
+					references += `<a class="enchiridion-open-reference" data-reference-uuid="${reference.uuid}">${reference.flags.enchiridion?.icon||defaultIcon} ${reference.name} </a>`
+				}
+			}
 
-		//Owned Items
-		let items = "";
+			//Summary
+			let summary = document.content||document.system?.details?.biography?.value||document.system?.description?.value||document.system?.background||document?.system?.summary||"";
+			let summaryUuids = summary.match(/@(.*?)\[(.*?)]/g)
+			if (summaryUuids?.length){
+				for (let summaryUuid of summaryUuids) {
+					summaryUuid = summaryUuid.replace('[','.').replace(']','').replace('@','')
+					const reference = await fromUuid(summaryUuid);
+					let type = reference?.type || reference?.documentName
+					if (["Item","Actor","JournalEntry"].includes(reference?.documentName)){
+						if (reference.documentName == 'Folder') type = "Folder";
+						const defaultIcon =  game.settings.get('enchiridion', 'default-'+type);
+						references += `<a class="enchiridion-open-reference" data-reference-uuid="${reference.uuid}">${reference.flags.enchiridion?.icon||defaultIcon} ${reference.name} </a>`
+					}
+				}
+			}
+			if (referenceUuids.length) references += `</span>`;
+			summary = TextEditor.enrichHTML(summary);
 
-		document.items?.forEach(item =>{
-			items+=
-			`<li class="enchiridion-owned-item enchiridion-drag">
-				<img class="enchiridion-owned-item" src="${item.img}" data-item-id="${item.id}" data-uuid="${item.uuid}" height="30" width="30"/>
-				<div>${item.name}</div>
-			</li>`
-		});
+			//Assets
+			let assets = "";
+			if (document.flags?.enchiridion?.assets){
+				if(document.flags?.enchiridion?.assets.some(el => el.uuid) || summaryUuids?.length) references += `<span title="Outgoing References" class="enchiridion-reference-section">▶️`;
+				for (const asset of document.flags?.enchiridion?.assets) {
+						let assetButtons = '';
+						switch(asset?.type){
+							case 'image':
+								assetButtons += '<a class="fas fa-image enchiridion-asset-activate" data-activation="1" title = "View"></a><a class="fas fa-share enchiridion-asset-activate" data-activation="2" title = "Share"></a>';
+							break;
+							case 'video':
+								assetButtons += '<a class="fas fa-image enchiridion-asset-activate" data-activation="1" title = "View"></a><a class="fas fa-share enchiridion-asset-activate" data-activation="2" title = "Share"></a>';
+							break;
+							case 'audio':
+								assetButtons += '<a class="fas fa-play enchiridion-asset-activate" data-activation="1" title = "Play/Pause"></a><a class="fas fa-sync enchiridion-asset-activate" data-activation="2" title = "Loop"></a>';
+							break;
+							case 'RollTable':
+								assetButtons += '<a class="fas fa-dice enchiridion-asset-activate" data-activation="1" title = "Roll on Table"></a><a class="fas fa-cog enchiridion-asset-activate" data-activation="2" title = "Edit"></a>';
+							break;
+							case 'Playlist':
+								assetButtons += '<a class="fas fa-play enchiridion-asset-activate" data-activation="1" title = "Play/Pause"></a><a class="fas fa-cog enchiridion-asset-activate" data-activation="2" title = "Edit"></a>';
+							break;
+							case 'Scene':
+								assetButtons += '<a class="fas fa-map enchiridion-asset-activate" data-activation="1" title = "Activate Scene"></a><a class="fas fa-cog enchiridion-asset-activate" data-activation="2" title = "Edit"></a>';
+							break;
+							case 'application':
+								assetButtons += '<a class="fas fa-file-pdf enchiridion-asset-activate" data-activation="1" title = "View PDF"></a><a class="fas fa-cog enchiridion-asset-activate" data-activation="2" title = "Edit"></a>';
+							break;
+							case 'Actor':
+								assetButtons += '<a class="fas fa-cog enchiridion-asset-activate" data-activation="1" title = "Edit"></a><a class="fas fa-book-medical enchiridion-asset-activate" data-activation="2" title = "Enchiridion"></a>';
+							break;
+							case 'Item':
+								assetButtons += '<a class="fas fa-cog enchiridion-asset-activate" data-activation="1" title = "Edit"></a><a class="fas fa-book-medical enchiridion-asset-activate" data-activation="2" title = "Enchiridion"></a>';
+							break;
+							case'JournalEntry':
+								assetButtons += '<a class="fas fa-cog enchiridion-asset-activate" data-activation="1" title = "Edit"></a><a class="fas fa-book-medical enchiridion-asset-activate" data-activation="2" title = "Enchiridion"></a>'
+							break;
+							default: assetButtons += '<a class="fas fa-cog enchiridion-asset-activate" data-activation="1" title = "Edit"></a>';
+						}
 		
-		if (document.items){
-			items =
-			`<div class="enchiridion-items">
-			<h2>Owned Items</h2>
-			<ol class="enchiridion-item-list">
-				${items}
-			</ol>
-		</div>`
-		}
+						let specialClass = ''
+						if (asset?.type == 'Scene' && game.scenes.active.id == asset.id) specialClass = 'scene-active'
+						if (game.user.isGM) assetButtons += ` <a class="fas fa-eye-slash enchiridion-asset-activate" data-activation="3" title = "Hide From Players"></a><a class="fas fa-times enchiridion-asset-activate" data-activation="4" title = "Remove Association"></a>`;
+						assets+=
+						`<li class="enchiridion-asset enchiridion-drop private-${asset.permissions.default} ${specialClass}" data-drop-type="swap" title="${asset.name}" data-name="${asset.name}" data-type='${asset.type}' data-id='${asset.id}' data-img = "${asset.image}">
+							<div class="crop asset-image">
+								<img class="enchiridion-asset-activate cover enchiridion-drag" src="${asset.image}" height="100%" width="100%" data-activation="0"/>
+							</div>
+							<input type="text" class="enchiridion-asset-name" value="${asset.name}" ${game.user.isGM?"":"readonly"}>
+							<div>                             
+								${assetButtons}
+								
+							</div>
+						</li>`;
+		
+						//Resernces
+						if (asset?.uuid){
+							const assetDocument = await fromUuid(asset.uuid);
+							let type = assetDocument?.type || assetDocument?.documentName
+							if (["Item","Actor","JournalEntry"].includes(assetDocument?.documentName)){
+								if (assetDocument.documentName == 'Folder') type = "Folder";
+								const defaultIcon =  game.settings.get('enchiridion', 'default-'+type);
+								references += `<a class="enchiridion-open-reference" data-reference-uuid="${assetDocument.uuid}">${assetDocument.flags.enchiridion?.icon||defaultIcon} ${assetDocument.name} </a>`
+							}
+						}
+		
+					};
+					
+				if(document.flags?.enchiridion?.assets.some(el => el.uuid) || summaryUuids?.length) references += `</span>`;
+			}
 
-		const active = (document.uuid === activeTab)?"active":"";
-		let bodyEntry = 
-		`<div class="tab add-listener ${active} enchiridion-document form-group enchiridion-drop" data-drop-type="asset" data-tab="${document.uuid}" data-uuid="${document.uuid}">		
-			<div class="enchiridion-header">
-				<div class = 'crop'>
-					<img class="enchiridion-main-image cover enchiridion-drag enchiridion-drop" data-drop-type="mainImage" src="${document.img||"icons/svg/mystery-man.svg"}" title="${document.name}" height="100%" width="100%"/>
-				</div>
-				<div class = 'enchiridion-banner'>
-					<h1 class="enchiridion-title">
-						<div class="enchiridion-icon"><a>${icon}</a></div>
-						<div class = 'enchiridion-open-document enchiridion-name enchiridion-drag'><a>${document.name}</a></div>
-					</h1>
+			//Notes
+			let notes = "";
+			let noteControls = "";
+			if(game.user.isGM){
+				noteControls =`<a class="fas fa-eye-slash enchiridion-hide-note" title = "Hide From Players"></a>
+				<a class = "fas fa-times enchiridion-delete-note" title = "Delete"></a>`
+			}
+			document.flags?.enchiridion?.notes?.forEach(note =>{
+				notes+=
+				`<li class ="private-${note.permissions.default} enchiridion-note enchiridion-drop" data-drop-type="note">
+						<div class="enchiridion-note-content">${note.content}</div>
+						<h3>
+							${noteControls}
+						</h3>
+				</li>`
+			})
 
-					<div class = 'enchiridion-references enchiridion-drop' data-drop-type="references">
-						${references}
+			//Owned Items
+			let items = "";
+			document.items?.forEach(item =>{
+				items+=
+				`<li class="enchiridion-owned-item enchiridion-drag">
+					<img class="enchiridion-owned-item" src="${item.img}" data-item-id="${item.id}" data-uuid="${item.uuid}" height="30" width="30"/>
+					<div>${item.name}</div>
+				</li>`
+			});
+			
+			if (document.items){
+				items =
+				`<div class="enchiridion-items">
+				<h2>Owned Items</h2>
+				<ol class="enchiridion-item-list">
+					${items}
+				</ol>
+			</div>`
+			}
+
+			const active = (document.uuid === activeTab)?"active":"";
+
+			let bodyEntry = 
+			`<div class="tab add-listener ${active} enchiridion-document form-group enchiridion-drop" data-drop-type="asset" data-tab="${document.uuid}" data-uuid="${document.uuid}">		
+				<div class="enchiridion-header">
+					<div class = 'crop'>
+						<img class="enchiridion-main-image cover enchiridion-drag enchiridion-drop" data-drop-type="mainImage" src="${document.img||"icons/svg/mystery-man.svg"}" title="${document.name}" height="100%" width="100%"/>
+					</div>
+					<div class = 'enchiridion-banner'>
+						<h1 class="enchiridion-title">
+							<div class="enchiridion-icon"><a>${icon}</a></div>
+							<div class = 'enchiridion-open-document enchiridion-name enchiridion-drag'><a>${document.name}</a></div>
+						</h1>
+
+						<div class = 'enchiridion-references enchiridion-drop' data-drop-type="references">
+							${references}
+						</div>
+
 					</div>
 
 				</div>
+				<hr>
+				<div class="enchiridion-summary">
+					<h2>Summary</h2>
+					${summary}
+				</div>
 
-			</div>
-			<hr>
-			<div class="enchiridion-summary">
-				<h2>Summary</h2>
-				${document.content||""}
-				${document.system?.details?.biography?.value||""}
-				${document.system?.description||""}
-			</div>
+				<div class="enchiridion-assets">
+					<h2>Assets</h2>
+					<ul class="enchiridion-asset-list">
+						${assets}
+					</ul>
+				</div>
 
-			<div class="enchiridion-assets">
-				<h2>Assets</h2>
-				<ul class="enchiridion-asset-list">
-					${assets}
-				</ul>
-			</div>
+				<div class="enchiridion-notes">
+					<h2>Notes <a class="fas fa-message-plus enchiridion-new-note"></a></h2>
+					<ul class = "enchiridion-note-list">
+						${notes}
+					</ul>
+				</div>
 
-			<div class="enchiridion-notes">
-				<h2>Notes <a class="fas fa-plus enchiridion-new-note"></a></h2>
-				<ul class = "enchiridion-note-list">
-					${notes}
-				</ul>
-			</div>
+				${items}
 
-			${items}
+			</div>`;
 
-		</div>`;
-
-		
-
-
-		//Update the body if it already exists, otherwise create it
-		const $currentBody = $body.find(`[data-uuid="${document.uuid}"]`);
-		if($currentBody.length){
-			$currentBody.replaceWith(bodyEntry)
-		}else{
-			$body.append(bodyEntry);
-		};
-
-		// if (document.documentName == 'Actor'){
-		// 	const sheet = document.sheet
-		// 	console.log(sheet)
-		// 	const data = await sheet.getData()
-		// 	const html = await renderTemplate(`systems/forgeoflegends/templates/actor/character-sheet.html`, data);
-		// 	sheet.activateListeners($body.find(`[data-uuid="${document.uuid}"]`).append(html));
-		// }
-
-		// if (document.documentName == 'JournalEntry'){
-		// 	const sheet = document.sheet
-		// 	console.log(sheet)
-		// 	const data = await sheet.getData()
-		// 	const html = await renderTemplate(`templates/journal/sheet.html`, data);
-		// 	sheet.activateListeners($body.find(`[data-uuid="${document.uuid}"]`).append(html));
-		// }
+			//Update the body if it already exists, otherwise create it
+			const $currentBody = $body.find(`[data-uuid="${document.uuid}"]`);
+			if($currentBody.length){
+				$currentBody.replaceWith(bodyEntry)
+			}else{
+				$body.append(bodyEntry);
+			};
 
 
-		//Generate the tab
-		const tabEntry = `
-		<li class="add-listener enchiridion-tab ${active} enchiridion-document  enchiridion-drag enchiridion-drop" data-drop-type="tab" title="${document.name}" data-tab="${document.uuid}" data-uuid="${document.uuid}">
-				<a><i class="fas fa-times enchiridion-close-tab"></i></a>
-				<h4><a class="tab-content enchiridion-drag" data-drop-type="tab"><span class = "icon">${icon}</span>${document.name}</a></h4>
-		</li>`;
+			//Include additional Info?
 
-		//Update the tab if it already exists, otherwise create it
-		const $tab = $tabs.find(`[data-uuid="${document.uuid}"]`);
-		if($tab.length){
-			$tab.replaceWith(tabEntry)
-		}else{
-			$tabs.append(tabEntry);
-		};
+			// if (document.documentName == 'Actor'){
+			// 	const sheet = document.sheet
+			// 	console.log(sheet)
+			// 	const data = await sheet.getData()
+			// 	const html = await renderTemplate(`systems/forgeoflegends/templates/actor/character-sheet.html`, data);
+			// 	sheet.activateListeners($body.find(`[data-uuid="${document.uuid}"]`).append(html));
+			// }
 
-		if(active != "")$tabs.find(`[data-uuid="${document.uuid}"] .tab-content`)[0].click()
-	})
+			// if (document.documentName == 'JournalEntry'){
+			// 	const sheet = document.sheet
+			// 	console.log(sheet)
+			// 	const data = await sheet.getData()
+			// 	const html = await renderTemplate(`templates/journal/sheet.html`, data);
+			// 	sheet.activateListeners($body.find(`[data-uuid="${document.uuid}"]`).append(html));
+			// }
 
+			//Generate the tab
+			const tabEntry = `
+			<li class="add-listener enchiridion-tab ${active} enchiridion-document enchiridion-drag enchiridion-drop" data-drop-type="tab" title="${document.name}" data-tab="${document.uuid}" data-uuid="${document.uuid}">
+					<a class ="enchiridion-close-tab"><i class="fas fa-times"></i></a>
+					<h4><a class="tab-content enchiridion-drag enchiridion-drop" data-drop-type="tab"><span class = "icon">${icon}</span>${document.name}</a></h4>
+			</li>`;
 
+			//Update the tab if it already exists, otherwise create it
+			const $tab = $tabs.find(`[data-uuid="${document.uuid}"]`);
+			if($tab.length){
+				$tab.replaceWith(tabEntry)
+			}else{
+				$tabs.append(tabEntry);
+			};
 
-	// userTabs.forEach(async tab =>{
-
-	// 	const document = documents.find(document => document.uuid === tab);
-	// 	console.log($(`.enchiridion-tree[data-uuid="${document.uuid}"]`).data())
-		
-	// 	if (!document) return;
-	// 	const assets = $('.enchiridion-tab')//.data('assets')
-		
-	// 	// console.log(assets)
-	// 	// if (assets) console.log(assets.includes(document.uuid))
-	// })
-
-
-
-
-
-
+			if(active != "")$tabs.find(`[data-uuid="${document.uuid}"] .tab-content`)[0].click()
+		}
+	}
 
 	Enchiridion.listeners()
 }
 
 
-Enchiridion.updateDocument = async function (document, updates){
-	if (updates?.flags?.enchiridion?.notes || updates?.flags?.enchiridion?.assets || document.actor) return;
-	Enchiridion.addToTree([document]);
-	Enchiridion.addToBody([document]);
-}
 
-Enchiridion.deleteDocument = async function (document){
-	const $siblings = $(`.enchiridion-tree[data-uuid="${document.uuid}"]`).siblings();
-	if (!$siblings.length) $(`.enchiridion-tree[data-uuid="${document.uuid}"]`).parent().parent().children('h4').children('.enchiridion-expand').children('.enchiridion-chevron').hide();
-	$(`#enchiridion [data-uuid="${document.uuid}"]`).remove()
-	let tabs = game.settings.get('enchiridion', 'userTabs')
-	tabs = $.grep(tabs, function(value) {
-	  return value != document.uuid;
-	});
-	game.settings.set('enchiridion', 'userTabs', tabs);
-	
-	const active = game.settings.get('enchiridion', 'activeTab');
-	$('#enchiridion').find('.active').removeClass('active');
-	$(`#enchiridion .enchiridion-main [data-uuid="${active}"]`).addClass("active")
-}
+
 
 
 
@@ -447,6 +520,8 @@ Enchiridion.listeners = function(){
 	const html = $('#enchiridion').find('.add-listener');
 	html.find('.enchiridion-open-tab').on("dblclick", Enchiridion.openDocument);
 	html.find('.enchiridion-open-tab').on("singleclick", Enchiridion.openTab);
+	html.find('.enchiridion-open-reference').on("dblclick", Enchiridion.openReferenceDocument);
+	html.find('.enchiridion-open-reference').on("singleclick", Enchiridion.openReferenceTab);
 	html.find("a.entity-link").on("contextmenu", Enchiridion.openTab);
 	html.find('.fa-plus').on("click", Enchiridion.createContents);
 	html.find('.enchiridion-search-controls a').on("click", Enchiridion.toggleSearch);
@@ -473,7 +548,7 @@ Enchiridion.listeners = function(){
 		html.find('.enchiridion-delete-note').on("click", Enchiridion.deleteNote);
 		html.find(".enchiridion-ownership").on("click", Enchiridion.ownership);
 	} else {
-		html.find('.private-true').remove()
+		html.find('.private-true').hide()
 	};
 
 	Enchiridion.contextmenu(html);
@@ -515,11 +590,54 @@ Enchiridion.openTab = async function(ev){
 			const document = await fromUuid(uuid);
 			Enchiridion.addToBody([document]);
 		}else{
-			console.log($(`[data-uuid="${uuid}"] .tab-content`))
 			$(`[data-uuid="${uuid}"] .tab-content`)[0].click()
 		};
 	}
 };
+
+Enchiridion.openDocument = async function (ev) {
+	const uuid = $(ev.currentTarget).closest('.enchiridion-document').data('uuid');
+	const document = await fromUuid(uuid);
+	console.log(document.visible)
+	if (!document.visible) return;
+	const sheet = document.sheet;
+	if(ui.PDFoundry?.Utilities?.getPDFData(document)){
+		const pdf = ui.PDFoundry.Utilities.getPDFData(document)
+		ui.PDFoundry.openPDF(pdf)
+	} else if ( sheet.rendered ) {
+		sheet.maximize();
+		sheet.bringToTop();
+	} else sheet.render(true);
+}
+
+Enchiridion.openReferenceTab = async function(ev){
+	const uuid = $(ev.currentTarget).data('referenceUuid');
+	if (uuid.split('.')[0] == "Folder") return;
+	game.settings.set('enchiridion', 'activeTab', uuid);
+	let tabs = game.settings.get('enchiridion', 'userTabs');
+	if (tabs.indexOf(uuid) == -1){
+		tabs.push(uuid);
+		game.settings.set('enchiridion', 'userTabs', tabs);
+		const document = await fromUuid(uuid);
+		Enchiridion.addToBody([document]);
+	}else{
+		$(`[data-uuid="${uuid}"] .tab-content`)[0].click()
+	};
+};
+
+Enchiridion.openReferenceDocument = async function (ev) {
+	const uuid = $(ev.currentTarget).data('referenceUuid');
+	const document = await fromUuid(uuid);
+	if (!document.visible) return;
+	const sheet = document.sheet;
+	if(ui.PDFoundry?.Utilities?.getPDFData(document)){
+		const pdf = ui.PDFoundry.Utilities.getPDFData(document)
+		ui.PDFoundry.openPDF(pdf)
+	} else if ( sheet.rendered ) {
+		sheet.maximize();
+		sheet.bringToTop();
+	} else sheet.render(true);
+}
 
 Enchiridion.selectTab = function (ev){
 	const uuid = $(ev.currentTarget).closest('.enchiridion-document').data('uuid');
@@ -564,22 +682,17 @@ Enchiridion.emojiButton = function (i,icon){
 
 Enchiridion.createContents = async function(ev){
 	let uuid = null;
-	// let actor = false;
-	// let item = false;
-	// let journal = false;
+	let parentDescription ='';
 	if (ev?.closest){
 		uuid = ev.closest('.enchiridion-document').data('uuid');
-		// selected = uuid.split('.')[0]
-		// console.log(selected)
-		// if (selected == "Actor") actor= true;
-		// if (selected == "Item") item= true;
-		// if (selected == "Journal Entry") journal= true;
-	}
-	// console.log(actor)
+		const parent = await fromUuid(uuid)
+		parentDescription = `${parent.name} ➜ `;
+	};
+
 	let documentTypes = ['Journal Entry'].concat(game.system.documentTypes["Actor"]).concat(game.system.documentTypes["Item"]);
 	const html = await renderTemplate(`modules/enchiridion/templates/enchiridion-create.html`, {documentTypes});
 	Dialog.prompt({
-		title: "Create New Document",
+		title: `${parentDescription}Create New Document`,
 		content: html,
 		callback: async function(html) {
 			const form = html[0].querySelector("form");
@@ -594,7 +707,7 @@ Enchiridion.createContents = async function(ev){
 				folder,
 				flags: {
 					enchiridion:{
-						parent: uuid || null,
+						parent: uuid,
 						icon
 					}}
 			}
@@ -639,7 +752,7 @@ Enchiridion.clickImage = async function (ev){
 	const uuid = $(ev.currentTarget).closest('.enchiridion-document').data('uuid');
 	const document = await fromUuid(uuid);
 	if (!document?.img) return;
-	let ip = new ImagePopout(document.data.img, {
+	let ip = new ImagePopout(document.img, {
 		title: document.name,
 		shareable: true,
 		uuid: document.uuid
@@ -660,19 +773,6 @@ Enchiridion.ownedItem = async function (ev){
 		item.sheet.maximize();
 		item.sheet.bringToTop();
 	} else item?.sheet?.render(true);
-}
-
-Enchiridion.openDocument = async function (ev) {
-	const uuid = $(ev.currentTarget).closest('.enchiridion-document').data('uuid');
-	const document = await fromUuid(uuid);
-	const sheet = document.sheet;
-	if(ui.PDFoundry?.Utilities?.getPDFData(document)){
-		const pdf = ui.PDFoundry.Utilities.getPDFData(document)
-		ui.PDFoundry.openPDF(pdf)
-	} else if ( sheet.rendered ) {
-		sheet.maximize();
-		sheet.bringToTop();
-	} else sheet.render(true);
 }
 
 Enchiridion.editNote = async function (ev){
@@ -708,7 +808,6 @@ Enchiridion.deleteNote = async function (ev){
 	notes.splice(index, 1);
 	await document.setFlag('enchiridion', 'notes', notes)
 	Enchiridion.addToBody([document]);
-	// $document.find(`.enchiridion-note-list li:nth-child(${index+1})`).remove()
 }
 
 Enchiridion.hideNote = async function (ev){
@@ -719,7 +818,6 @@ Enchiridion.hideNote = async function (ev){
 	notes[index].permissions={default:!notes[index].permissions.default}
 	await document.setFlag('enchiridion', 'notes', notes)
 	Enchiridion.addToBody([document]);
-	// $document.find(`.enchiridion-note-list li:nth-child(${index+1})`).toggleClass('private-true')
 }
 
 Enchiridion.updateAssetName = async function (ev){
@@ -746,8 +844,7 @@ Enchiridion.toggleSearch = function (ev) {
 Enchiridion.sort = function (documents){
 	const $nav = $(`.enchiridion-nav`)
 	documents.forEach(document => {
-		const $tree = $nav.find(`.enchiridion-tree[data-uuid="${document.uuid}"]`);
-		// $tree.addClass('add-listener')
+		const $tree = $nav.find(`.enchiridion-tree[data-uuid="${document?.uuid}"]`);
 		const $parent = $tree.parent();
 		const siblings = $parent.children().toArray();
 		siblings.sort(function(a, b){
@@ -839,34 +936,58 @@ Enchiridion.contextmenu = function (html){
 			name: "Create Contents",
 			icon: '<i class="fas fa-plus"></i>',
 			condition: game.user.isGM,
-			callback: li => Enchiridion.createContents(li)
-		},
-		{
-			name: "Clear Container",
-			icon: '<i class="fas fa-unlink"></i>',
-			condition: li => game.user.isGM && li.parent().parent().hasClass('enchiridion-children') && !li.parent().parent().parent().is('[data-uuid*="Folder"]'),
-			callback: async li => {
-				const uuid = li.closest('.enchiridion-document').data('uuid')
-				const document = await fromUuid(uuid);
-				const parentUuid = document.getFlag('enchiridion', 'parent');
-				
-				await document.setFlag('enchiridion', 'parent', null);
-				document.update({parent: null});
-				if (parentUuid){
-					const parent = await fromUuid(parentUuid);
-					Enchiridion.addToTree([parent]);
-				}
-				return;
+			callback: li => {
+				$('.enchiridion-multiselect').removeClass('enchiridion-multiselect');
+				Enchiridion.createContents(li);
 			}
 		},
 		{
-			name: "FOLDER.Clear",
-			icon: '<i class="fas fa-folder"></i>',
-			condition: li => game.user.isGM && li.parent().parent().hasClass('enchiridion-children') && li.parent().parent().parent().is('[data-uuid*="Folder"]'),
+			name: "Remove from Container",
+			icon: '<i class="fas fa-unlink"></i>',
+			condition: li => game.user.isGM && li.parent().parent().hasClass('enchiridion-children'),
 			callback: async li => {
-			const uuid = li.closest('.enchiridion-document').data('uuid')
-			const document = await fromUuid(uuid);
-			await document.update({folder: null});
+				const uuid = li.closest('.enchiridion-document').data('uuid')
+				const multiUuid = $('.enchiridion-multiselect')?.closest('.enchiridion-document')?.map(function(){
+					return $(this).data('uuid');
+				}).get();
+				if (multiUuid.indexOf(uuid) == -1) multiUuid.push(uuid);
+				multiUuid.forEach(async function (uuid) {
+					const document = await fromUuid(uuid);
+					await document.update({
+							flags: {
+								enchiridion: {
+									parent: null
+								}
+							},
+							folder: null
+						},
+						{
+							otherUuids: [document.flags?.enchiridion?.parent]
+						}
+					)
+				});
+				$('.enchiridion-multiselect').removeClass('enchiridion-multiselect');
+			}
+		},
+		{
+			name: "View Image",
+			icon: '<i class="fas fa-image"></i>',
+			condition: li => !li.parent().is('[data-uuid*="Folder"]'),
+			callback: async li => {
+				const uuid = li.closest('.enchiridion-document').data('uuid');
+				const multiUuid = $('.enchiridion-multiselect')?.closest('.enchiridion-document')?.map(function(){
+					return $(this).data('uuid');
+				}).get();
+				if (multiUuid.indexOf(uuid) == -1) multiUuid.push(uuid);
+				multiUuid.forEach(async function (uuid) {
+					const document = await fromUuid(uuid);
+					new ImagePopout(document.img, {
+						title: document.name,
+						shareable: true,
+						uuid: document.uuid
+					}).render(true);
+				});
+				$('.enchiridion-multiselect').removeClass('enchiridion-multiselect');
 			}
 		},
 		{
@@ -874,144 +995,184 @@ Enchiridion.contextmenu = function (html){
 			icon: '<i class="fas fa-trash"></i>',
 			condition: () => game.user.isGM,
 			callback: async li => {
-				const uuid = li.closest('.enchiridion-document').data('uuid')
-				const document = await fromUuid(uuid);
-				return document.deleteDialog();
+				const uuid = li.closest('.enchiridion-document').data('uuid');
+				const multiUuid = $('.enchiridion-multiselect')?.closest('.enchiridion-document')?.map(function(){
+					return $(this).data('uuid');
+				}).get();
+				if (multiUuid.indexOf(uuid) == -1) multiUuid.push(uuid);
+				multiUuid.forEach(async function (uuid) {
+					const document = await fromUuid(uuid);
+					const childrenUuids = $(`.enchiridion-tree[data-uuid="${document.uuid}"]`).children('.enchiridion-children').children().map(function(){
+						return $(this).data('uuid');
+					}).get()
+				
+					for (let i = 0; i < childrenUuids.length; i++) {
+						const child = await fromUuid(childrenUuids[i]);
+						await child.update({
+							flags: {
+								enchiridion: {
+									parent: null
+								}
+							},
+							folder: null
+						})
+					}
+					return document.delete();
+					// // return document.deleteDialog();
+					// const type = game.i18n.localize(document.constructor.metadata.label);
+					// enchidiriondelete =function(document){
+					// 	console.log(document, this)
+					// 	this.delete.bind(document)
+					// }
+					// return Dialog.confirm({
+					// 	title: `${game.i18n.format("DOCUMENT.Delete", {type})}: ${document.name}`,
+					// 	content: `<h4>${game.i18n.localize("AreYouSure")}</h4><p>${game.i18n.format("SIDEBAR.DeleteWarning", {type})}</p>`,
+					// 	yes: enchidiriondelete(document)
+					//   });
+				});
+			}
+		},
+		// {
+		// 	name: "PERMISSION.Configure",
+		// 	icon: '<i class="fas fa-lock"></i>',
+		// 	condition: li => game.user.isGM && !li.parent().is('[data-uuid*="Folder"]'),
+		// 	callback: async li => {
+		// 		const uuid = li.closest('.enchiridion-document').data('uuid')
+		// 		const document = await fromUuid(uuid);
+		// 		new PermissionControl(document).render(true);
+		// 	}
+		// },
+		// {
+		// 	name: "Confiture Content Permissions",
+		// 	icon: '<i class="fas fa-lock"></i>',
+		// 	condition: li => game.user.isGM && li.parent().is('[data-uuid*="Folder"]'),
+		// 	callback: async li => {
+		// 		const uuid = li.closest('.enchiridion-document').data('uuid')
+		// 		const document = await fromUuid(uuid);
+		// 		new PermissionControl(document).render(true);
+		// 	}
+		// },
+		// {
+		// 	name: "Delete all Contents",
+		// 	icon: '<i class="fas fa-dumpster"></i>',
+		// 	condition: li => game.user.isGM && li.parent().is('[data-uuid*="Folder"]'),
+		// 	callback: async li => {
+		// 		const uuid = li.closest('.enchiridion-document').data('uuid')
+		// 		const document = await fromUuid(uuid);
+		// 		return Dialog.confirm({
+		// 			title: `${game.i18n.localize("FOLDER.Delete")} ${document.name}`,
+		// 			content: `<h4>${game.i18n.localize("AreYouSure")}</h4><p>${game.i18n.localize("FOLDER.DeleteWarning")}</p>`,
+		// 			yes: () => {
+		// 				console.log(li.closest('.enchiridion-document .enchiridion-children'))
+		// 				//document.delete({deleteSubfolders: true, deleteContents: true})
+		// 			}
+		// 		});
+		// 	}
+		// },
+		{
+			name: "Select all Contents",
+			icon: '<i class="fas fa-file-check"></i>',
+			condition: li => game.user.isGM && li.siblings('.enchiridion-children').children().length,
+			callback: async li => {
+				li.closest('.enchiridion-document').children(".enchiridion-children").children().addClass('enchiridion-multiselect');
 			}
 		},
 
-		{
-			name: "PERMISSION.Configure",
-			icon: '<i class="fas fa-lock"></i>',
-			condition: () => game.user.isGM,
+				{
+			name: "SIDEBAR.Duplicate",
+			icon: '<i class="far fa-copy"></i>',
+			condition: li => game.user.isGM && !li.parent().is('[data-uuid*="Folder"]'),
 			callback: async li => {
+				$('.enchiridion-multiselect').removeClass('enchiridion-multiselect');
 				const uuid = li.closest('.enchiridion-document').data('uuid')
 				const document = await fromUuid(uuid);
-				new PermissionControl(document).render(true);
+				return document.clone({name: `${document?.name} (Copy)`}, {save: true});
 			}
 		},
 		{
-			name: "FOLDER.Delete",
-			icon: '<i class="fas fa-dumpster"></i>',
-			condition: li => game.user.isGM && li.parent().is('[data-uuid*="Folder"]'),
+			name: "SIDEBAR.Export",
+			icon: '<i class="fas fa-file-export"></i>',
+			condition: li => game.user.isGM && !li.parent().is('[data-uuid*="Folder"]'),
 			callback: async li => {
+				$('.enchiridion-multiselect').removeClass('enchiridion-multiselect');
 				const uuid = li.closest('.enchiridion-document').data('uuid')
 				const document = await fromUuid(uuid);
-				return Dialog.confirm({
-					title: `${game.i18n.localize("FOLDER.Delete")} ${document.name}`,
-					content: `<h4>${game.i18n.localize("AreYouSure")}</h4><p>${game.i18n.localize("FOLDER.DeleteWarning")}</p>`,
-					yes: () => document.delete({deleteSubfolders: true, deleteContents: true})
-				});
+				return document.exportToJSON();
 			}
-		}
-				// {
-		// 	name: "SIDEBAR.Duplicate",
-		// 	icon: '<i class="far fa-copy"></i>',
-		// 	condition: () => game.user.isGM,
-		// 	callback: li => {
-		// 	const uuid = li?.closest('.enchiridion-document')?.data()?.uuid
-		// 	const document = game.collections.get(uuid.split('.')[0])?.get(uuid.split('.')[1]);
-		// 	return document?.clone({name: `${document?.name} (Copy)`}, {save: true});
-		// 	}
-		// },
-		// {
-		// 	name: "SIDEBAR.Export",
-		// 	icon: '<i class="fas fa-file-export"></i>',
-		// 	condition: li => {
-		// 	const uuid = li?.closest('.enchiridion-document')?.data()?.uuid
-		// 	const document = game.collections.get(uuid.split('.')[0])?.get(uuid.split('.')[1]);
-		// 	return document?.isOwner;
-		// 	},
-		// 	callback: li => {
-		// 	const uuid = li?.closest('.enchiridion-document')?.data()?.uuid
-		// 	const document = game.collections.get(uuid.split('.')[0])?.get(uuid.split('.')[1]);
-		// 	return document?.exportToJSON();
-		// 	}
-		// },
-		// {
-		// 	name: "SIDEBAR.Import",
-		// 	icon: '<i class="fas fa-file-import"></i>',
-		// 	condition: li => {
-		// 	const uuid = li?.closest('.enchiridion-document')?.data()?.uuid
-		// 	const document = game.collections.get(uuid.split('.')[0])?.get(uuid.split('.')[1]);
-		// 	return document?.isOwner;
-		// 	},
-		// 	callback: li => {
-		// 	const uuid = li?.closest('.enchiridion-document')?.data()?.uuid
-		// 	const document = game.collections.get(uuid.split('.')[0])?.get(uuid.split('.')[1]);
-		// 	return document?.importFromJSONDialog();
-		// 	}
-		// },
-		// {
-		// 	name: "FOLDER.Edit",
-		// 	icon: '<i class="fas fa-edit"></i>',
-		// 	condition: li => game.user.isGM && li.parent().is('[data-uuid*="Folder"]'),
-		// 	callback: header => {
-		// 	const li = header.parent()[0];
-		// 	const folder = game.folders.get(header.closest('.enchiridion-document')?.data()?.uuid.split('.')[1]);
-		// 	const options = {top: li.offsetTop, left: window.innerWidth - 310 - FolderConfig.defaultOptions.width};
-		// 	new FolderConfig(folder, options).render(true);
-		// 	}
-		// },
+		},
+		{
+			name: "SIDEBAR.Import",
+			icon: '<i class="fas fa-file-import"></i>',
+			condition: li => game.user.isGM && !li.parent().is('[data-uuid*="Folder"]'),
+			callback: async li => {
+				$('.enchiridion-multiselect').removeClass('enchiridion-multiselect');
+				const uuid = li.closest('.enchiridion-document').data('uuid')
+				const document = await fromUuid(uuid);
+				return document?.importFromJSONDialog();
+			}
+		},
 		// {
 		// 	name: "FOLDER.Export",
 		// 	icon: `<i class="fas fa-atlas"></i>`,
-		// 	condition: header => {
-		// 	const folder = game.folders.get(header.closest('.enchiridion-document')?.data()?.uuid.split('.')[1]);
-		// 	return CONST.COMPENDIUM_DOCUMENT_TYPES.includes(folder?.type);
-		// 	},
-		// 	callback: header => {
-		// 	const li = header.parent();
-		// 	const folder = game.folders.get(header.closest('.enchiridion-document')?.data()?.uuid.split('.')[1]);
-		// 	return folder.exportDialog(null, {
-		// 		top: Math.min(li[0].offsetTop, window.innerHeight - 350),
-		// 		left: window.innerWidth - 720,
-		// 		width: 400
-		// 	});
+		// 	condition: li => game.user.isGM && li.parent().is('[data-uuid*="Folder"]'),
+		// 	callback: async li => {
+		// 		const uuid = li.closest('.enchiridion-document').data('uuid')
+		// 		const document = await fromUuid(uuid);
+		// 		return document.exportDialog(null, {
+		// 			top: Math.min(li[0].offsetTop, window.innerHeight - 350),
+		// 			left: window.innerWidth - 720,
+		// 			width: 400
+		// 		});
 		// 	}
 		// },
-		// {
-		// 	name: "FOLDER.CreateTable",
-		// 	icon: `<i class="${CONFIG.RollTable.sidebarIcon}"></i>`,
-		// 	condition: header => {
-		// 	const folder = game.folders.get(header.closest('.enchiridion-document')?.data()?.uuid.split('.')[1]);
-		// 	return CONST.COMPENDIUM_DOCUMENT_TYPES.includes(folder?.type);
-		// 	},
-		// 	callback: header => {
-		// 	const li = header.parent()[0];
-		// 	const folder = game.folders.get(header.closest('.enchiridion-document')?.data()?.uuid.split('.')[1]);
-		// 	return Dialog.confirm({
-		// 		title: `${game.i18n.localize("FOLDER.CreateTable")}: ${folder.name}`,
-		// 		content: game.i18n.localize("FOLDER.CreateTableConfirm"),
-		// 		yes: () => RollTable.fromFolder(folder),
-		// 		options: {
-		// 		top: Math.min(li.offsetTop, window.innerHeight - 350),
-		// 		left: window.innerWidth - 680,
-		// 		width: 360
-		// 		}
-		// 	});
-		// 	}
-		// },
-		// {
-		// 	name: "FOLDER.Remove",
-		// 	icon: '<i class="fas fa-trash"></i>',
-		// 	condition: game.user.isGM,
-		// 	callback: header => {
-		// 	const li = header.parent();
-		// 	const folder = game.folders.get(header.closest('.enchiridion-document')?.data()?.uuid.split('.')[1]);
-		// 	return Dialog.confirm({
-		// 		title: `${game.i18n.localize("FOLDER.Remove")} ${folder?.name}`,
-		// 		content: `<h4>${game.i18n.localize("AreYouSure")}</h4><p>${game.i18n.localize("FOLDER.RemoveWarning")}</p>`,
-		// 		yes: () => folder.delete({deleteSubfolders: false, deleteContents: false}),
-		// 		options: {
-		// 		top: Math.min(li[0].offsetTop, window.innerHeight - 350),
-		// 		left: window.innerWidth - 720,
-		// 		width: 400
-		// 		}
-		// 	});
-		// 	}
-		// },
-
+		{
+			name: "FOLDER.CreateTable",
+			icon: `<i class="fas fa-th-list"></i>`,
+			condition: li => game.user.isGM && li.parent().is('[data-uuid*="Folder"]'),
+			callback: async li => {
+				$('.enchiridion-multiselect').removeClass('enchiridion-multiselect');
+				const uuid = li.closest('.enchiridion-document').data('uuid')
+				const document = await fromUuid(uuid);
+				return Dialog.confirm({
+					title: `${game.i18n.localize("FOLDER.CreateTable")}: ${document.name}`,
+					content: game.i18n.localize("FOLDER.CreateTableConfirm"),
+					yes: async () => {
+						const uuids = li.closest('.enchiridion-document').children(".enchiridion-children").children().map(function(){
+							return $(this).data('uuid');
+						}).get()
+						let contents =[]
+						await uuids.forEach(async function (uuid){
+							const c= await fromUuid(uuid)
+							contents.push(c)
+						});
+						const results = contents.map((e, i) => {
+							return {
+							  text: e.name,
+							  type: CONST.TABLE_RESULT_TYPES.DOCUMENT,
+							  collection: e.documentName,
+							  resultId: e.id,
+							  img: e.thumbnail || e.img,
+							  weight: 1,
+							  range: [i+1, i+1],
+							  drawn: false
+							};
+						  });
+						  const table = await RollTable.create({
+							name: document.name,
+							description: `A random table created from the contents of the ${document.name} Folder.`,
+							results: results,
+							formula: `1d${results.length}`
+						  });
+						  return table.sheet.render(true)
+					},
+					options: {
+						top: Math.min(li.offsetTop, window.innerHeight - 350),
+						left: window.innerWidth - 680,
+						width: 360
+					}
+				});
+			}
+		}
 	];
 
 	new ContextMenu(html.filter('.enchiridion-tree, .enchiridion-tab').find('h4'), null, contextItems);
@@ -1088,72 +1249,74 @@ Enchiridion.onDrop = async function(ev){
 	if (!game.user.isGM) return;
 
 	const uuid = $(ev.srcElement).closest('.enchiridion-document').data('uuid') || $(ev.srcElement).find('.enchiridion-document.active').data('uuid');
+	const document = await fromUuid(uuid);
+	let assets = document.getFlag('enchiridion', 'assets') || [];
 
-	const multiUuid = $('.enchiridion-multiselect')?.closest('.enchiridion-document')?.map(function(){
-		return $(this).data('uuid');
-	}).get();
-	// const multiUuid = []
-	multiUuid.push(uuid)
-	multiUuid.reverse().forEach(async function(uuid){
-		const document = await fromUuid(uuid);
-		let assets = document.getFlag('enchiridion', 'assets') || [];
+	const dropType = $(ev.srcElement).closest('.enchiridion-drop').data('dropType');
+
+	const files = ev.dataTransfer.files;
+	let dataTransfer;
+	try {dataTransfer = JSON.parse(ev.dataTransfer.getData('text/plain'));}
+	catch (err) {};
 	
-		const dropType = $(ev.srcElement).closest('.enchiridion-drop').data('dropType');
-		const files = ev.dataTransfer.files;
-		let dataTransfer;
-		try {dataTransfer = JSON.parse(ev.dataTransfer.getData('text/plain'));}
-		catch (err) {};
-		
-	/* Drop from External File*/
-	
-		if(files.length){
-			Object.values(files).forEach(async function(file){
-				const fileType = file.type.split('/')[0]
-				const extention = file.type.split('/')[1]
-				if (!fileType || (fileType == 'application' && extention != 'pdf')) return ui.notifications.warn("That file type is not supported.")
-				if (dropType) await FilePicker.upload("data", `enchiridion/${fileType}s/${document.collectionName}`, file, {});
-	
-				const assetFile = `enchiridion/${fileType}s/${document.collectionName}/${file.name}`
-				let image = 'modules/enchiridion/icons/book-open-solid.png';
-				if (fileType == 'image' || fileType == 'video') image = assetFile;
-				if (fileType == 'audio') image = 'modules/enchiridion/icons/music-solid.png';
-				if (extention == 'pdf') image = 'modules/enchiridion/icons/file-pdf-regular.png';
-	
-				const newAsset = {
-					id: assetFile,
-					name: file.name.split('.')[0],
-					image,
-					type: fileType,
-					permissions:{default:false}
-				}
-	
-				if(dropType == "mainImage"){
-					if (fileType == 'image' || fileType == 'video'){
-						await document.update({[`img`]: assetFile});
-					}
-				} else {
-					assets = [].concat(assets,[newAsset])
-					await document.setFlag('enchiridion', 'assets', assets);
-					return Enchiridion.addToBody([document]);
-				}
-			})
-		} else
-	
-	/* Drop from Anywhere in Foundry*/
-	
-		if(dataTransfer){
+	const sourceAsset = dataTransfer?.asset;
 
 	
-			// const asset = $(ev.srcElement).closest('.enchiridion-asset').index();
-			const destinationIndex = $(ev.srcElement).closest('.enchiridion-asset').index();
-			const sourceAsset = dataTransfer.asset;
-			const sourceIndex = dataTransfer.assetIndex;
-		
-			const sourceUuid = dataTransfer.uuid || (dataTransfer.pack?"Compendium."+dataTransfer.pack:dataTransfer.type) +"."+ dataTransfer.id;
-					
+	
+/* Drop from External File*/
+
+	if(files.length && !sourceAsset){
+		Object.values(files).forEach(async function(file){
+			const fileType = file.type.split('/')[0]
+			const extention = file.type.split('/')[1]
+			if (!fileType || (fileType == 'application' && extention != 'pdf')) return ui.notifications.warn("That file type is not supported.")
+			if (dropType) await FilePicker.upload("data", `enchiridion-uploads/${fileType}s/${document.collectionName}`, file, {});
+
+			const assetFile = `enchiridion-uploads/${fileType}s/${document.collectionName}/${file.name}`
+			let image = 'modules/enchiridion/icons/book-open-solid.png';
+			if (fileType == 'image' || fileType == 'video') image = assetFile;
+			if (fileType == 'audio') image = 'modules/enchiridion/icons/music-solid.png';
+			if (extention == 'pdf') image = 'modules/enchiridion/icons/file-pdf-regular.png';
+
+			const newAsset = {
+				id: assetFile,
+				name: file.name.split('.')[0],
+				image,
+				type: fileType,
+				permissions:{default:false}
+			}
+
+			if(dropType == "mainImage"){
+				if (fileType == 'image' || fileType == 'video'){
+					await document.update({[`img`]: assetFile});
+				}
+			} else {
+				assets = [].concat(assets,[newAsset])
+				await document.setFlag('enchiridion', 'assets', assets);
+				return Enchiridion.addToBody([document]);
+			}
+		})
+	} else
+
+/* Drop from Anywhere in Foundry*/
+
+	if(dataTransfer){
+
+		// const asset = $(ev.srcElement).closest('.enchiridion-asset').index();
+		const destinationIndex = $(ev.srcElement).closest('.enchiridion-asset').index();
+		const sourceIndex = dataTransfer.assetIndex;
+	
+		const sourceUuid = dataTransfer.uuid || (dataTransfer.pack?"Compendium."+dataTransfer.pack:dataTransfer.type) +"."+ dataTransfer.id;
+
+		const multiUuid = $('.enchiridion-multiselect')?.closest('.enchiridion-document')?.map(function(){
+			return $(this).data('uuid');
+		}).get();
+		if (multiUuid.indexOf(sourceUuid) == -1) multiUuid.push(sourceUuid);
+
+		multiUuid.forEach(async function(sourceUuid){
 			let sourceDocument = await fromUuid(sourceUuid);
 
-			let sourceParentUuid = sourceDocument.flags.enchiridion?.parent
+			let sourceParentUuid = sourceDocument.flags?.enchiridion?.parent
 			let sourceParent
 			if (sourceParentUuid) sourceParent = await fromUuid(sourceParentUuid);
 		
@@ -1171,8 +1334,7 @@ Enchiridion.onDrop = async function(ev){
 				type: sourceDocument.documentName,
 				permissions:{}
 			}
-	
-	/* Drop from Enchiridion*/
+
 			if(sourceDocument){
 				switch(dropType){
 					default:
@@ -1181,17 +1343,18 @@ Enchiridion.onDrop = async function(ev){
 							await document.setFlag('enchiridion', 'assets', assets)
 							return Enchiridion.addToBody([document]);
 						}
+					break;
 					case "swap":
 						if (!(sourceIndex+1) || !(destinationIndex+1)) {
-							assets = [].concat(assets,[sourceAsset || newAsset])
-							await document.setFlag('enchiridion', 'assets', assets)
+							assets = [].concat(assets,[sourceAsset || newAsset]);
+							await document.setFlag('enchiridion', 'assets', assets);
 							return Enchiridion.addToBody([document]);
 						} else {
-							assets[sourceIndex] = [assets[destinationIndex],assets[destinationIndex]=assets[sourceIndex]][0]
+							assets[sourceIndex] = [assets[destinationIndex],assets[destinationIndex]=assets[sourceIndex]][0];
 							await document.setFlag('enchiridion', 'assets', assets);
 							return Enchiridion.addToBody([document]);
 						};
-	
+					break;
 					case "mainImage":
 						const newImage = {
 							id: document.data._id,
@@ -1204,6 +1367,7 @@ Enchiridion.onDrop = async function(ev){
 						document.update({[`img`]: sourceAsset.image});
 						await document.setFlag('enchiridion', 'assets', assets);
 						return Enchiridion.addToBody([document]);
+					break;
 					case "note":
 						let notes = document.getFlag('enchiridion', 'notes')
 						const index = $(ev.srcElement).closest('.enchiridion-note').index();
@@ -1221,7 +1385,7 @@ Enchiridion.onDrop = async function(ev){
 								await document.setFlag('enchiridion', 'notes', notes);
 								return Enchiridion.addToBody([document]);
 						}
-
+					break;
 					case "tab":
 						let tabs = game.settings.get('enchiridion', 'userTabs');
 						if (!(tabs.indexOf(dataTransfer.uuid)+1) || !(tabs.indexOf(uuid)+1)){
@@ -1231,31 +1395,45 @@ Enchiridion.onDrop = async function(ev){
 							}
 						} else{
 							tabs[tabs.indexOf(dataTransfer.uuid)] = [tabs[tabs.indexOf(uuid)],tabs[tabs.indexOf(uuid)]=tabs[tabs.indexOf(dataTransfer.uuid)]][0]
-							game.settings.set('enchiridion', 'userTabs', tabs)
-						};
-						game.settings.set('enchiridion', 'activeTab', uuid);
-						return Enchiridion.addToBody([document]);
-					case 'tree':
-						function checkLoops(document){
-							if(sourceUuid == uuid) return true;
-							const destinationParentUuid = document?.data?.flags?.enchiridion?.parent
-							if(destinationParentUuid == uuid || destinationParentUuid == sourceUuid || document?.folder?.uuid == sourceUuid){
-								ui.notifications.warn("That arrangement would create a loop! Please choose a different arrangement.")
-								return true};
-								
-							const parent = game.collections.get(destinationParentUuid?.split('.')[0])?.get(destinationParentUuid?.split('.')[1]);
-							if (parent){
-								return checkLoops(fromUuid(destinationParentUuid))
-							} else {
-								return false
+							game.settings.set('enchiridion', 'userTabs', tabs);
+							jQuery.fn.swapWith = function(to) {
+								return this.each(function() {
+									var copy_to = $(to).clone(true);
+									var copy_from = $(this).clone(true);
+									$(to).replaceWith(copy_from);
+									$(this).replaceWith(copy_to);
+								});
 							};
-						}
-	
-						if (checkLoops(document)) return;
-	
+							$(`.enchiridion-tab[data-uuid="${document.uuid}"]`).swapWith($(`.enchiridion-tab[data-uuid="${sourceDocument.uuid}"]`));
+						};
+
+						return Enchiridion.addToBody([document, sourceDocument]);
+					break;
+					case 'tree':
+						async function checkLoops(targetDocument){
+							let parentUuids = [];
+							async function pushParent(child){
+								parentUuids.push(child?.uuid);
+								let parentUuid = child?.flags?.enchiridion?.parent;
+								if (parentUuid){
+									const parent = await fromUuid(parentUuid);
+									
+									await pushParent(parent);
+								};
+							};
+
+							await pushParent(targetDocument);
+
+							if(parentUuids.includes(sourceUuid)){
+								ui.notifications.warn("That arrangement would create a loop! Please choose a different arrangement.")
+								return true
+							};
+						};
+						if (await checkLoops(document)) return;
+							
 						if(ev.ctrlKey){
 							
-							const parentUuid = document.flags.enchiridion?.parent;
+							const parentUuid = document.flags?.enchiridion?.parent;
 							if (parentUuid) {
 								const parent = await fromUuid(parentUuid);
 								if (checkLoops(parent)) return;
@@ -1268,24 +1446,19 @@ Enchiridion.onDrop = async function(ev){
 							} else {
 								await sourceDocument.setFlag('enchiridion', 'parent', null);
 							}
-
-
 	
 							let h = $(ev.srcElement).innerHeight();
 							let o = $(ev.srcElement).offset(); 
 							let y = ev.pageY - o.top;
 							let sortBefore = false
 							if(h/2 > y) sortBefore = true;
-
-
-
+	
 							const actors = game.actors;
 							const items = game.items;
 							const journal = game.journal;
 							const folders = game.folders.filter((folder) => ["Actor","JournalEntry","Item"].includes(folder.data.type));
 							let documents = [...journal, ...actors, ...items, ...folders];
 	
-
 							const sorting = SortingHelpers.performIntegerSort(sourceDocument, {target:document, siblings:documents, sortKey:'sort', sortBefore});
 							const itemSort = sorting.filter(d => d.target.documentName == "Item");
 							const actorSort = sorting.filter(d => d.target.documentName == "Actor");
@@ -1309,25 +1482,30 @@ Enchiridion.onDrop = async function(ev){
 							await updateSort(actorSort, Actor)
 							await updateSort(journalSort, JournalEntry)
 							await updateSort(folderSort, Folder)
-							return Enchiridion.addToTree([document,sourceDocument,sourceParent].filter(x => x !== undefined));
-						} 
-
-
-
-
-						let expanded = game.settings.get('enchiridion', 'userExpanded')
-						expanded.indexOf(uuid) === -1 ? expanded.push(uuid) : 1;
-						game.settings.set('enchiridion', 'userExpanded', expanded);
-						await sourceDocument.setFlag('enchiridion', 'parent', uuid)
-						if (uuid.split('.')[0]=="Folder") await sourceDocument.update({folder: uuid.split('.')[1]});
-						await sourceDocument.update({parent: uuid?.split('.')[1] || null});
-						
-						Enchiridion.addToTree([document,sourceDocument,sourceParent].filter(x => x !== undefined));
-
-					}
+							// return Enchiridion.addToTree([document,sourceDocument,sourceParent].filter(x => x !== undefined));
+						} else {
+							let expanded = game.settings.get('enchiridion', 'userExpanded')
+							expanded.indexOf(uuid) === -1 ? expanded.push(uuid) : 1;
+							game.settings.set('enchiridion', 'userExpanded', expanded);
+							// await sourceDocument.setFlag('enchiridion', 'parent', uuid)
+							let updates = {
+								flags: {
+									enchiridion: {
+										parent: uuid
+									}
+								},
+							}
+							if (uuid.split('.')[0]=="Folder"){
+								updates.folder = uuid.split('.')[1],
+								updates.parent = uuid.split('.')[1]
+							}
+							sourceDocument.update(updates, {otherUuids: [document?.uuid,sourceParent?.uuid]});
+						}
+					break;
+				}
 			}
-		}
-	});
+		})
+	}
 
 };
 
@@ -1354,9 +1532,17 @@ Enchiridion.assetActivate = async function(ev){
 	let assets = document.getFlag('enchiridion', 'assets');
 
 	if (activation == 4 && game.user.isGM){
+		const asset = document.flags?.enchiridion?.assets[index]
 		assets.splice(index, 1);
 		document.setFlag('enchiridion', 'assets', assets)
-		return $asset.remove();
+		$asset.remove();
+		let updates = [document]
+		if (asset.uuid){
+			const assetDocument = await fromUuid(asset.uuid);
+			updates.push(assetDocument)
+		}
+		console.log(updates)
+		return Enchiridion.addToBody(updates);
 	};
 
 	if (activation == 3 && game.user.isGM){
@@ -1365,7 +1551,7 @@ Enchiridion.assetActivate = async function(ev){
 		return $asset.toggleClass('private-true');
 	};
 
-	const asset = document.flags.enchiridion?.assets[index]
+	const asset = document.flags?.enchiridion?.assets[index]
 	if (!asset) return;
 	const assetUuid = asset.uuid
 	let assetDocument
@@ -1439,6 +1625,7 @@ Enchiridion.assetActivate = async function(ev){
 			if(activation == 1){
 				assetDocument.draw()
 			} else {
+				if (!assetDocument.visible) return;
 				if (assetDocument.sheet.rendered) {
 					assetDocument.sheet.maximize();
 					assetDocument.sheet.bringToTop();
@@ -1455,6 +1642,7 @@ Enchiridion.assetActivate = async function(ev){
 				}
 
 			} else if (activation == 2){
+				if (!assetDocument.visible) return;
 				if (assetDocument.sheet.rendered) {
 					assetDocument.sheet.maximize();
 					assetDocument.sheet.bringToTop();
@@ -1485,6 +1673,7 @@ Enchiridion.assetActivate = async function(ev){
 				const pdf = ui.PDFoundry.Utilities.getPDFData(assetDocument);
 				ui.PDFoundry.openPDF(pdf);
 			} else {
+				if (!assetDocument.visible) return;
 				if (assetDocument.sheet.rendered) {
 					assetDocument.sheet.maximize();
 					assetDocument.sheet.bringToTop();
@@ -1503,6 +1692,7 @@ Enchiridion.assetActivate = async function(ev){
 						game.settings.set('enchiridion', 'activeTab', assetUuid);
 						Enchiridion.addToBody([assetDocument]);
 				} else {
+					if (!assetDocument.visible) return;
 					if (assetDocument.sheet.rendered) {
 						assetDocument.sheet.maximize();
 						assetDocument.sheet.bringToTop();
@@ -1521,6 +1711,7 @@ Enchiridion.assetActivate = async function(ev){
 						game.settings.set('enchiridion', 'activeTab', assetUuid);
 						Enchiridion.addToBody([assetDocument]);
 				} else {
+					if (!assetDocument.visible) return;
 					if (assetDocument.sheet.rendered) {
 						assetDocument.sheet.maximize();
 						assetDocument.sheet.bringToTop();
@@ -1532,6 +1723,7 @@ Enchiridion.assetActivate = async function(ev){
 		break;
 		default:
 			if (assetDocument){
+				if (!assetDocument.visible) return;
 				if (assetDocument.sheet.rendered) {
 					assetDocument.sheet.maximize();
 					assetDocument.sheet.bringToTop();
@@ -1625,6 +1817,7 @@ Hooks.once("ready", async function() {
 		Folder: '📂',
 		Playlist: '🎵',
 		Scene: '🗺️',
+		Deck: '🃏',
 		base: '📖'
 	}
 
@@ -1710,35 +1903,38 @@ Hooks.once("ready", async function() {
 	}
 	
 	async function createFoldersIfMissing() {
-		await createFolderIfMissing("enchiridion");
-		await createFolderIfMissing("enchiridion/images");
-		await createFolderIfMissing("enchiridion/images/actors");
-		await createFolderIfMissing("enchiridion/images/journal");
-		await createFolderIfMissing("enchiridion/images/items");
-		await createFolderIfMissing("enchiridion/audios");
-		await createFolderIfMissing("enchiridion/audios/actors");
-		await createFolderIfMissing("enchiridion/audios/journal");
-		await createFolderIfMissing("enchiridion/audios/items");
-		await createFolderIfMissing("enchiridion/videos");
-		await createFolderIfMissing("enchiridion/videos/actors");
-		await createFolderIfMissing("enchiridion/videos/journal");
-		await createFolderIfMissing("enchiridion/videos/items");
-		await createFolderIfMissing("enchiridion/applications");
-		await createFolderIfMissing("enchiridion/applications/actors");
-		await createFolderIfMissing("enchiridion/applications/journal");
-		await createFolderIfMissing("enchiridion/applications/items");
+		await createFolderIfMissing("enchiridion-uploads");
+		await createFolderIfMissing("enchiridion-uploads/images");
+		await createFolderIfMissing("enchiridion-uploads/images/actors");
+		await createFolderIfMissing("enchiridion-uploads/images/journal");
+		await createFolderIfMissing("enchiridion-uploads/images/items");
+		await createFolderIfMissing("enchiridion-uploads/audios");
+		await createFolderIfMissing("enchiridion-uploads/audios/actors");
+		await createFolderIfMissing("enchiridion-uploads/audios/journal");
+		await createFolderIfMissing("enchiridion-uploads/audios/items");
+		await createFolderIfMissing("enchiridion-uploads/videos");
+		await createFolderIfMissing("enchiridion-uploads/videos/actors");
+		await createFolderIfMissing("enchiridion-uploads/videos/journal");
+		await createFolderIfMissing("enchiridion-uploads/videos/items");
+		await createFolderIfMissing("enchiridion-uploads/applications");
+		await createFolderIfMissing("enchiridion-uploads/applications/actors");
+		await createFolderIfMissing("enchiridion-uploads/applications/journal");
+		await createFolderIfMissing("enchiridion-uploads/applications/items");
 	}
 	
-	if (game.user.isGM) {
-		const navToggleButton = $('#nav-toggle');
-		navToggleButton.before(
-			`<button id='openEnchiridion' type="button" class="nav-item" title="Open Enchiridion"><i class="fas fa-book-medical"></i></button>`
-		);
 
-		$('#openEnchiridion').on('click', () => Enchiridion.open())
-		$('#openEnchiridion').on('contextmenu', () => Enchiridion.createContents())
+	// const navToggleButton = $('#nav-toggle');
+	// navToggleButton.before(
+	// 	`<button id='openEnchiridion' type="button" class="nav-item" title="Open Enchiridion"><i class="fas fa-book-medical"></i></button>`
+	// );
 
-	}
+	$('.main-controls').append(
+		`<li class="scene-control openEnchiridion" title="Open Enchiridion"><i class="fas fa-book-medical" ></i></li>`
+	);
+
+	$('.openEnchiridion').on('click', () => Enchiridion.open())
+	$('.openEnchiridion').on('contextmenu', () => Enchiridion.createContents())
+
 
 
 
@@ -1767,10 +1963,6 @@ Hooks.once("ready", async function() {
 /* -------------------------------------------------------------------------- */
 /*                                    Hooks                                   */
 /* -------------------------------------------------------------------------- */
-
-
-
-
 Hooks.on("createItem", Enchiridion.updateDocument)
 Hooks.on("updateItem", Enchiridion.updateDocument)
 Hooks.on("deleteItem", Enchiridion.deleteDocument)
@@ -1784,16 +1976,10 @@ Hooks.on("deleteFolder", Enchiridion.deleteDocument)
 Hooks.on("updateFolder", Enchiridion.updateDocument)
 Hooks.on("createFolder", Enchiridion.updateDocument)
  
-
-
-
-
 Hooks.on("renderActorSheet", function(document, html){
 	html.find("a.entity-link").on("contextmenu", Enchiridion.openTab);
 })
  
-
-
 Hooks.on("renderActorSheet", async function(document,html){
 	html.find('.window-header h4').after('<a class="open-enchiridion"><i class="fas fa-book-medical"></i>Enchiridion</a>')
 	html.find('.open-enchiridion').on("click",function(){
@@ -1841,6 +2027,32 @@ Hooks.on("renderJournalSheet", async function(document,html){
 	// const enchiridion = await renderTemplate(`modules/enchiridion/templates/enchiridion-body.html`, document);
 	// html.find('input').append(`<div id="enchiridion">${enchiridion}</div>`)
 })
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
